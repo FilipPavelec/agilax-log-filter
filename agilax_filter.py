@@ -8,7 +8,7 @@ Formát: 2026.05.14 00:00:00.151│    service    │[level] zpráva
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 from datetime import datetime
-import os, re, calendar, threading
+import os, re, calendar, threading, sys
 
 try:
     import ttkbootstrap as ttk
@@ -511,6 +511,60 @@ class ModuleToggle(tk.Frame):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Registrace přibalených fontů
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_asset_dir() -> str:
+    """Vrátí složku s assety — funguje jak při spuštění .py, tak z PyInstaller EXE."""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller EXE — assety jsou rozbaleny do sys._MEIPASS
+        return sys._MEIPASS
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _register_bundled_fonts():
+    """
+    Zaregistruje přibalené .ttf soubory do systému, aby je Tkinter viděl.
+    - Windows: AddFontResourceEx přes ctypes (dočasně, jen pro tuto session)
+    - Linux/macOS: zkopíruje do ~/.fonts a zavolá fc-cache (pokud není jiná cesta)
+    Tiše selže pokud registrace není možná.
+    """
+    asset_dir = _get_asset_dir()
+    fonts = [
+        os.path.join(asset_dir, "DejaVuSans.ttf"),
+        os.path.join(asset_dir, "DejaVuSans-Bold.ttf"),
+    ]
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            gdi32 = ctypes.WinDLL("gdi32")
+            for path in fonts:
+                if os.path.exists(path):
+                    # FR_PRIVATE = 0x10 — font viditelný jen pro tento proces
+                    gdi32.AddFontResourceExW(path, 0x10, 0)
+        except Exception:
+            pass
+
+    elif sys.platform in ("linux", "linux2", "darwin"):
+        try:
+            import shutil
+            home_fonts = os.path.join(os.path.expanduser("~"), ".fonts")
+            os.makedirs(home_fonts, exist_ok=True)
+            changed = False
+            for path in fonts:
+                if os.path.exists(path):
+                    dest = os.path.join(home_fonts, os.path.basename(path))
+                    if not os.path.exists(dest):
+                        shutil.copy2(path, dest)
+                        changed = True
+            if changed:
+                os.system("fc-cache -f > /dev/null 2>&1")
+        except Exception:
+            pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Hlavní GUI
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -536,13 +590,16 @@ class AgilaxLogFilterApp:
     def _setup_fonts(self):
         import tkinter.font as tkfont
 
+        # Pokusit se zaregistrovat přibalené .ttf fonty do systému
+        # (funguje na Windows i Linuxu — tiše selže pokud to nejde)
+        _register_bundled_fonts()
+
         avail = set(tkfont.families())
 
-        # Preferovaný pořadí: nimbus sans l (dostupný, plná čeština),
-        # pak ostatní fallbacky
+        # Preferovaný pořadí: DejaVu Sans (přibalený), pak systémové fallbacky
         UI_FONT = None
-        for c in ("nimbus sans l", "Nimbus Sans L",
-                  "DejaVu Sans", "Ubuntu", "helvetica", "TkDefaultFont"):
+        for c in ("DejaVu Sans", "nimbus sans l", "Nimbus Sans L",
+                  "Ubuntu", "helvetica", "TkDefaultFont"):
             if c in avail or c.startswith("Tk"):
                 UI_FONT = c
                 break
@@ -557,7 +614,7 @@ class AgilaxLogFilterApp:
 
         # Monospace pro výsledky logu
         MONO_FONT = None
-        for c in ("nimbus mono l", "courier 10 pitch", "DejaVu Sans Mono",
+        for c in ("DejaVu Sans Mono", "nimbus mono l", "courier 10 pitch",
                   "Courier New", "courier", "TkFixedFont"):
             if c in avail or c.startswith("Tk"):
                 MONO_FONT = c
