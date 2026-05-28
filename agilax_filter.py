@@ -614,9 +614,9 @@ class AgilaxLogFilterApp:
 
         # Monospace pro výsledky logu
         MONO_FONT = None
-        for c in ("DejaVu Sans Mono", "nimbus mono l", "courier 10 pitch",
-                  "Courier New", "courier", "TkFixedFont"):
-            if c in avail or c.startswith("Tk"):
+        for c in ("DejaVu Sans Mono", "Consolas", "Courier New",
+                  "nimbus mono l", "courier 10 pitch", "courier"):
+            if c in avail:
                 MONO_FONT = c
                 break
         if MONO_FONT is None:
@@ -1172,6 +1172,7 @@ class AgilaxLogFilterApp:
         self._txt_set("⏳ Připravuji zobrazení...\n")
 
         def worker():
+            # Sestavit text a tag_ranges ve vlákně (CPU práce)
             lines      = []
             tag_ranges = []
             pos        = 0
@@ -1190,32 +1191,47 @@ class AgilaxLogFilterApp:
             if truncated:
                 suffix = (f"\n⚠ Zobrazeno prvních {MAX_DISPLAY:,} z {len(entries):,} "
                           "záznamů. Zpřesněte filtry pro zúžení výsledků.\n")
-            self.root.after(0, self._redraw_apply,
-                            full_text, suffix, tag_ranges, color, q, use_re, case)
+
+            # Předat do hlavního vlákna — vkládání po krocích
+            self.root.after(0, self._redraw_insert,
+                            full_text, suffix, tag_ranges, color, q, use_re, case, 0)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _redraw_apply(self, full_text, suffix, tag_ranges, color, q, use_re, case):
-        self.txt.config(state=tk.NORMAL)
-        self.txt.delete('1.0', tk.END)
+    # Velikost jednoho bloku textu vkládaného za jeden after() krok
+    _INSERT_CHUNK = 100_000   # znaků — ~0.5–1 s práce Tkinteru, UI zůstane responzivní
 
-        # Vložit text po blocích aby UI nezamrzlo
-        CHUNK = 200_000  # znaků na jeden insert
-        for i in range(0, len(full_text), CHUNK):
-            self.txt.insert(tk.END, full_text[i:i+CHUNK])
-        if suffix:
-            self.txt.insert(tk.END, suffix)
+    def _redraw_insert(self, full_text, suffix, tag_ranges, color, q, use_re, case, offset):
+        """Vkládá text po blocích; každý blok je naplánován přes after() aby UI nezamrzlo."""
+        if offset == 0:
+            self.txt.config(state=tk.NORMAL)
+            self.txt.delete('1.0', tk.END)
 
+        end = min(offset + self._INSERT_CHUNK, len(full_text))
+        self.txt.insert(tk.END, full_text[offset:end])
+
+        if end < len(full_text):
+            # Ještě zbývá text — naplánovat další krok a vrátit řízení event loopu
+            pct = int(end * 100 / len(full_text))
+            self._set_status(f"⏳ Zobrazuji výsledky ... {pct} %")
+            self.root.after(0, self._redraw_insert,
+                            full_text, suffix, tag_ranges, color, q, use_re, case, end)
+        else:
+            # Veškerý text je vložen — přidat suffix a aplikovat tagy
+            if suffix:
+                self.txt.insert(tk.END, suffix)
+            self.root.after(0, self._redraw_tags, tag_ranges, color, q, use_re, case)
+
+    def _redraw_tags(self, tag_ranges, color, q, use_re, case):
+        """Aplikuje barevné tagy a highlight — vše najednou přes Tcl (rychlé)."""
         if color and tag_ranges:
-            # Seskupit indexy podle tagu a aplikovat přes Tcl volání najednou
-            # — výrazně rychlejší než volat tag_add pro každý řádek zvlášť
             from collections import defaultdict
             by_tag = defaultdict(list)
             for tag, s, e in tag_ranges:
                 by_tag[tag].append(f"1.0+{s}c")
                 by_tag[tag].append(f"1.0+{e}c")
             for tag, indices in by_tag.items():
-                # Tcl: .text tag add <tag> i1 i2 i3 i4 ...
+                # Jedno Tcl volání s hromadnými páry — O(n) místo O(n²)
                 self.txt.tk.call(self.txt._w, "tag", "add", tag, *indices)
 
         if q:
@@ -1226,12 +1242,12 @@ class AgilaxLogFilterApp:
                     for m in re.finditer(q, content, 0 if case else re.IGNORECASE):
                         hl_indices.extend((f"1.0+{m.start()}c", f"1.0+{m.end()}c"))
                 else:
-                    text   = content if case else content.lower()
-                    needle = q if case else q.lower()
-                    nlen   = len(needle)
-                    idx    = 0
+                    text_lc = content if case else content.lower()
+                    needle  = q if case else q.lower()
+                    nlen    = len(needle)
+                    idx     = 0
                     while True:
-                        p = text.find(needle, idx)
+                        p = text_lc.find(needle, idx)
                         if p == -1: break
                         hl_indices.extend((f"1.0+{p}c", f"1.0+{p+nlen}c"))
                         idx = p + 1
@@ -1241,6 +1257,7 @@ class AgilaxLogFilterApp:
                 pass
 
         self.txt.config(state=tk.DISABLED)
+        self._set_status(f"✓ Hotovo — zobrazeno {len(self.filtered_entries):,} záznamů")
 
     def _txt_set(self, text: str):
         self.txt.config(state=tk.NORMAL)
