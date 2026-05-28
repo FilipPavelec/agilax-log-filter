@@ -861,11 +861,8 @@ class AgilaxLogFilterApp:
         tk.Label(tb, text="Zobrazení:", font=self.F_SM,
                  bg=T["bg"], fg=T["fg_dim"]).pack(side=tk.LEFT)
         self.v_wrap  = tk.BooleanVar(value=False)
-        self.v_color = tk.BooleanVar(value=True)
         self._chk(tb, "Zalamovat řádky", self.v_wrap,
                   cmd=self._toggle_wrap).pack(side=tk.LEFT, padx=8)
-        self._chk(tb, "Barevné úrovně", self.v_color,
-                  cmd=self._redraw).pack(side=tk.LEFT, padx=4)
 
         tf2 = tk.Frame(right, bg=T["bg"]); tf2.pack(fill=tk.BOTH, expand=True)
         self.txt = tk.Text(tf2, font=self.F_MONO, wrap=tk.NONE, state=tk.DISABLED,
@@ -1159,7 +1156,7 @@ class AgilaxLogFilterApp:
     # ── Zobrazení výsledků ────────────────────────────────────────────────────
 
     def _redraw(self):
-        color  = self.v_color.get()
+        color  = False
         q      = self.v_search.get().strip()
         use_re = self.v_regex.get()
         case   = self.v_case.get()
