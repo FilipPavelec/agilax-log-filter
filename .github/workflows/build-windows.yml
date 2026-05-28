@@ -2,8 +2,8 @@ name: Build Windows EXE
 
 on:
   push:
-    tags:
-      - "v*"          # spustí se při tagu např. v1.0.0
+    branches:
+      - "**"          # každý push na jakoukoliv větev
   workflow_dispatch:  # nebo ručně přes GitHub UI tlačítkem
 
 jobs:
