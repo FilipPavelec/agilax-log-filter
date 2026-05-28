@@ -926,7 +926,7 @@ class AgilaxLogFilterApp:
 
     def _setup_tags(self):
         bold = (self.F_MONO[0], self.F_MONO[1], 'bold')
-        if self._dark:
+        if self._T["_dark"]:
             self.txt.tag_configure('ERROR',   foreground='#f38ba8', font=bold)
             self.txt.tag_configure('FATAL',   foreground='#eba0ac', font=bold)
             self.txt.tag_configure('WARNING', foreground='#fab387')
@@ -1198,27 +1198,48 @@ class AgilaxLogFilterApp:
     def _redraw_apply(self, full_text, suffix, tag_ranges, color, q, use_re, case):
         self.txt.config(state=tk.NORMAL)
         self.txt.delete('1.0', tk.END)
-        self.txt.insert('1.0', full_text)
-        if suffix: self.txt.insert(tk.END, suffix)
-        if color:
+
+        # Vložit text po blocích aby UI nezamrzlo
+        CHUNK = 200_000  # znaků na jeden insert
+        for i in range(0, len(full_text), CHUNK):
+            self.txt.insert(tk.END, full_text[i:i+CHUNK])
+        if suffix:
+            self.txt.insert(tk.END, suffix)
+
+        if color and tag_ranges:
+            # Seskupit indexy podle tagu a aplikovat přes Tcl volání najednou
+            # — výrazně rychlejší než volat tag_add pro každý řádek zvlášť
+            from collections import defaultdict
+            by_tag = defaultdict(list)
             for tag, s, e in tag_ranges:
-                self.txt.tag_add(tag, f"1.0+{s}c", f"1.0+{e}c")
-        if q and color:
+                by_tag[tag].append(f"1.0+{s}c")
+                by_tag[tag].append(f"1.0+{e}c")
+            for tag, indices in by_tag.items():
+                # Tcl: .text tag add <tag> i1 i2 i3 i4 ...
+                self.txt.tk.call(self.txt._w, "tag", "add", tag, *indices)
+
+        if q:
             try:
                 content = self.txt.get('1.0', tk.END)
+                hl_indices = []
                 if use_re:
                     for m in re.finditer(q, content, 0 if case else re.IGNORECASE):
-                        self.txt.tag_add('HIGHLIGHT', f"1.0+{m.start()}c", f"1.0+{m.end()}c")
+                        hl_indices.extend((f"1.0+{m.start()}c", f"1.0+{m.end()}c"))
                 else:
                     text   = content if case else content.lower()
                     needle = q if case else q.lower()
-                    idx = 0
+                    nlen   = len(needle)
+                    idx    = 0
                     while True:
                         p = text.find(needle, idx)
                         if p == -1: break
-                        self.txt.tag_add('HIGHLIGHT', f"1.0+{p}c", f"1.0+{p+len(q)}c")
+                        hl_indices.extend((f"1.0+{p}c", f"1.0+{p+nlen}c"))
                         idx = p + 1
-            except Exception: pass
+                if hl_indices:
+                    self.txt.tk.call(self.txt._w, "tag", "add", "HIGHLIGHT", *hl_indices)
+            except Exception:
+                pass
+
         self.txt.config(state=tk.DISABLED)
 
     def _txt_set(self, text: str):
